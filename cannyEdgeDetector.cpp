@@ -69,25 +69,12 @@ void writeData(const char *fileName, image img) {
 	fclose(outputImageFile);
 }
 
-/**
-	Returns the greatest divisor of the argument.
-	Useful at computing the number of threads per block.
-*/
-int getGreatestDivisor(int n)
-{
-	int res = n;
+void copyPropertiesToImage(image i, image &o) {
 
-	for (int i = 2; i <= sqrt(n); i++) {
-		while (res % i == 0) {
-			if (res <= 1024)
-				return res;
-			res /= i;
-		}
-		if (res <= 1024)
-			return res;
-	}
-	
-	return res;
+	o.pType = i.pType;
+	o.width = i.width;
+	o.height = i.height;
+	o.maxValColor = i.maxValColor;
 }
 
 __global__ void applyGaussianFilter(unsigned char *input, unsigned char *output, float *kernel, int iHeight, int iWidth, int kWidth) {
@@ -114,24 +101,45 @@ __global__ void applyGaussianFilter(unsigned char *input, unsigned char *output,
 	output[y * iWidth + x] = (unsigned char) sum;
 }
 
-__global__ void applySobelFilter(unsigned char *input, unsigned char *output, float *sobelX, float *sobelY, int iHeight, int iWidth, int kWidth) {
+// __global__ void applySobelFilter(unsigned char *input, unsigned char *output, float *sobelX, float *sobelY, int iHeight, int iWidth, int kWidth) {
 
-	int x = blockIdx.x * blockDim.x + threadIdx.x;
-	int y = blockIdx.y * blockDim.y + threadIdx.y;
+// 	int x = blockIdx.x * blockDim.x + threadIdx.x;
+// 	int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-	int halvedKW = kWidth / 2;
-	float gx = 0.0, gy = 0.0;
+// 	int halvedKW = kWidth / 2;
+// 	float gx = 0.0, gy = 0.0;
 
-	if (x > 0 && (x + 1) < iWidth && y > 0 && (y + 1) < iHeight) {
-		for (int i = -halvedKW; i <= halvedKW; i++) {
-			for (int j = -halvedKW; j <= halvedKW; j++) {
-				int kPosX = (j + halvedKW);
-				int kPosY = (i + halvedKW);
-				gx += (float) input[(y + i) * iWidth + (x + j)] * sobelX[kPosY * kWidth + kPosX];
-				gx += (float) input[(y + i) * iWidth + (x + j)] * sobelY[kPosY * kWidth + kPosX];
-			}
-		}
-		output[y * iWidth + x] = (unsigned char) sqrtf(gx * gx + gy * gy);
+// 	if (x > 0 && (x + 1) < iWidth && y > 0 && (y + 1) < iHeight) {
+// 		for (int i = -halvedKW; i <= halvedKW; i++) {
+// 			for (int j = -halvedKW; j <= halvedKW; j++) {
+// 				int kPosX = (j + halvedKW);
+// 				int kPosY = (i + halvedKW);
+// 				gx += (float) input[(y + i) * iWidth + (x + j)] * sobelX[kPosY * kWidth + kPosX];
+// 				gx += (float) input[(y + i) * iWidth + (x + j)] * sobelY[kPosY * kWidth + kPosX];
+// 			}
+// 		}
+// 		output[y * iWidth + x] = (unsigned char) sqrtf(gx * gx + gy * gy);
+// 	}
+// }
+
+__global__ void applySobelFilter(unsigned char in, unsigned char out, int ih, int iw) {
+
+	int x = blockIdx.x + blockDim.x + threadIdx.x;
+	int y = blockIdx.y + blockDim.y + threadIdx.y;
+
+	float gx, gy;
+
+	if (x > 0 && x + 1 < iw && y > 0 && y + 1 < ih) {
+		gx = 
+			1.0 * in[(y - 1) * iw + (x - 1)] + (-1.0) * in[(y - 1) * iw + (x + 1)] +
+			2.0 * in[y * iw + (x - 1)]			 + (-2.0) * in[y * iw + (x + 1)] 			 +
+			1.0 * in[(y + 1) * iw + (x - 1)] + (-1.0) * in[(y + 1) * iw + (x + 1)] ;
+
+		gy =
+			1.0    * in[(y - 1) * iw + (x - 1)] +    2.0 * in[(y - 1) * iw + x] +    1.0 * in[(y - 1) * iw + (x + 1)] +
+			(-1.0) * in[(y + 1) * iw + (x - 1)] + (-2.0) * in[(y + 1) * iw + x] + (-1.0) * in[(y + 1) * iw + (x + 1)];
+		
+		output[y * iw + x] = (unsigned char) sqrtf(gx * gx + gy * gy);
 	}
 }
 
@@ -139,8 +147,7 @@ int main(int argc, char *argv[]) {
 	
 	image input;
 
-	// readInput(argv[1], input);
-	// writeData(argv[2], input);
+	readInput(argv[1], input);
 
 	float gaussianKernel[25] = {
 		1.f/273.f,  4.f/273.f,  7.f/273.f,  4.f/273.f, 1.f/273.f, 
@@ -150,19 +157,19 @@ int main(int argc, char *argv[]) {
 		1.f/273.f,  4.f/273.f,  7.f/273.f,  4.f/273.f, 1.f/273.f,
 	};
 
-	float sobelKernelX[9] = {
-		1.f, 0.f, -1.f,
-		2.f, 0.f, -2.f,
-		1.f, 0.f, -1.f,
-	};
+	// float sobelKernelX[9] = {
+	// 	1.f, 0.f, -1.f,
+	// 	2.f, 0.f, -2.f,
+	// 	1.f, 0.f, -1.f,
+	// };
 
-	float sobelKernelY[9] = {
-		1.f, 2.f, 1.f,
-		0.f, 0.f, 0.f,
-		-1.f, -2.f, -1.f,
-	};
+	// float sobelKernelY[9] = {
+	// 	1.f, 2.f, 1.f,
+	// 	0.f, 0.f, 0.f,
+	// 	-1.f, -2.f, -1.f,
+	// };
 
-	int *d_gaussInput, *d_gaussOutput, *d_gaussKernel, *d_sobelKernelX, *d_sobelKernelY;
+	int *d_gaussInput, *d_gaussOutput, *d_gaussKernel, *d_sobelKernelX, *d_sobelKernelY, *d_sobelOutput;
 	int imgRes = input.height * img.height;
 
 	dim3 blocks (input.width / 16, input.height / 16);
@@ -178,9 +185,31 @@ int main(int argc, char *argv[]) {
 
 	cudaThreadSynchronize();
 
-	cudaMalloc(&d_sobelKernelX, SOBEL_WIDTH * SOBEL_WIDTH);
-	cudaMalloc(&d_sobelKernelY, SOBEL_WIDTH * SOBEL_WIDTH);
-	cudaMalloc();
+	cudaFree(d_gaussKernel);
+	cudaFree(d_gaussInput);
+
+	// cudaMalloc(&d_sobelKernelX, SOBEL_WIDTH * SOBEL_WIDTH);
+	// cudaMalloc(&d_sobelKernelY, SOBEL_WIDTH * SOBEL_WIDTH);
+	// cudaMemcpy(d_sobelKernelX, sobelX, SOBEL_WIDTH * SOBEL_WIDTH, sizeof(float), cudaMemcpyHostToDevice);
+	// cudaMemcpy(d_sobelKernelY, sobelY, SOBEL_WIDTH * SOBEL_WIDTH, sizeof(float), cudaMemcpyHostToDevice);
+	cudaMalloc(&d_sobelOutput, imgRes);
+
+	// applySobelFilter <<< blocks, threads >>> (d_gaussOutput, d_sobelOutput, d_sobelKernelX, d_sobelKernelY, input.height, input.width, SOBEL_WIDTH);
+
+	applySobelFilter <<< blocks, threads >>> (d_gaussOutput, d_sobelOutput, input.height, input.width);
+
+	cudaThreadSynchronize();
+
+	cudaMemcpy(output.data, d_sobelOutput, imgRes, cudaMemcpyDeviceToHost);
+
+	cudaFree(d_gaussOutput);
+	cudaFree(d_sobelKernelX);
+	cudaFree(d_sobelKernelY);
+	cudaFree(d_sobelOutput);
+
+	copyPropertiesToImage(input, output);
+
+	writeData(argv[2], output);
 
 	return 0;
 }
