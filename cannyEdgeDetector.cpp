@@ -4,7 +4,8 @@
 #include <string.h>
 using namespace std;
 
-#define GAUSS_SIZE 25
+#define GAUSS_WIDTH 5
+#define SOBEL_WIDTH 3
 
 typedef struct images {
 	char pType[3];
@@ -89,12 +90,49 @@ int getGreatestDivisor(int n)
 	return res;
 }
 
-__global__ void applyGaussianFilter(unsigned char *input, unsigned char *output, double *kernel, int imgHeight, int imgWidth) {
+__global__ void applyGaussianFilter(unsigned char *input, unsigned char *output, float *kernel, int iHeight, int iWidth, int kWidth) {
 
-	int kernelSize = 5;
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-	
+	float sum = 0.0;
 
+	int halvedKW = kWidth / 2;
+
+	for (int i = -halvedKW; i <= halvedKW; i++) {
+		for (int j = -halvedKW; j <= halvedKW; j++) {
+			if ((x + j) < iWidth && (x + j) >= 0 && (y + i) < iHeight && (y + i) >= 0) {
+				int kPosX = (j + halvedKW);
+				int kPosY = (i + halvedKW);
+				sum += (float) input[(y + i) * iWidth + (x + j)] * kernel[kPosY * kWidth + kPosX];
+			}
+		}
+	}
+
+	sum = min(sum, 255);
+
+	output[y * iWidth + x] = (unsigned char) sum;
+}
+
+__global__ void applySobelFilter(unsigned char *input, unsigned char *output, float *sobelX, float *sobelY, int iHeight, int iWidth, int kWidth) {
+
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+	int halvedKW = kWidth / 2;
+	float gx = 0.0, gy = 0.0;
+
+	if (x > 0 && (x + 1) < iWidth && y > 0 && (y + 1) < iHeight) {
+		for (int i = -halvedKW; i <= halvedKW; i++) {
+			for (int j = -halvedKW; j <= halvedKW; j++) {
+				int kPosX = (j + halvedKW);
+				int kPosY = (i + halvedKW);
+				gx += (float) input[(y + i) * iWidth + (x + j)] * sobelX[kPosY * kWidth + kPosX];
+				gx += (float) input[(y + i) * iWidth + (x + j)] * sobelY[kPosY * kWidth + kPosX];
+			}
+		}
+		output[y * iWidth + x] = (unsigned char) sqrtf(gx * gx + gy * gy);
+	}
 }
 
 int main(int argc, char *argv[]) {
@@ -104,28 +142,45 @@ int main(int argc, char *argv[]) {
 	// readInput(argv[1], input);
 	// writeData(argv[2], input);
 
-	double gaussianKernel[][5] = {
-		{1, 4, 7, 4, 1}, 
-		{4, 16, 26, 16, 4}, 
-		{7, 26, 41, 26, 7}, 
-		{4, 16, 26, 16, 4}, 
-		{1, 4, 7, 4, 1}
+	float gaussianKernel[25] = {
+		1.f/273.f,  4.f/273.f,  7.f/273.f,  4.f/273.f, 1.f/273.f, 
+		4.f/273.f, 16.f/273.f, 26.f/273.f, 16.f/273.f, 4.f/273.f, 
+		7.f/273.f, 26.f/273.f, 41.f/273.f, 26.f/273.f, 7.f/273.f, 
+		4.f/273.f, 16.f/273.f, 26.f/273.f, 16.f/273.f, 4.f/273.f, 
+		1.f/273.f,  4.f/273.f,  7.f/273.f,  4.f/273.f, 1.f/273.f,
 	};
 
-	for (int i = 0; i < 5; ++i)
-		for (int j = 0; j < 5; ++j)
-			gaussianKernel[i][j] /= 273.0;
+	float sobelKernelX[9] = {
+		1.f, 0.f, -1.f,
+		2.f, 0.f, -2.f,
+		1.f, 0.f, -1.f,
+	};
 
-	int *d_gaussInput, *d_gaussOutput, *d_gaussKernel;
+	float sobelKernelY[9] = {
+		1.f, 2.f, 1.f,
+		0.f, 0.f, 0.f,
+		-1.f, -2.f, -1.f,
+	};
+
+	int *d_gaussInput, *d_gaussOutput, *d_gaussKernel, *d_sobelKernelX, *d_sobelKernelY;
 	int imgRes = input.height * img.height;
+
+	dim3 blocks (input.width / 16, input.height / 16);
+	dim3 threads(16, 16);
 
 	cudaMalloc(&d_gaussInput, imgRes);
 	cudaMalloc(&d_gaussOutput, imgRes);
-	cudaMalloc(&d_gaussKernel, GAUSS_SIZE);
+	cudaMalloc(&d_gaussKernel, GAUSS_WIDTH * GAUSS_WIDTH);
 	cudaMemcpy(d_gaussInput, input, imgRes, cudaMemcpyHostToDevice);
-	cudaMemcpy(d_gaussKernel, gaussianKernel, GAUSS_SIZE, cudaMemcpyHostToDevice);
+	cudaMemcpy(d_gaussKernel, gaussianKernel, GAUSS_WIDTH * GAUSS_WIDTH * sizeof(float), cudaMemcpyHostToDevice);
 
+	applyGaussianFilter <<< blocks, threads >>> (d_gaussInput, d_gaussOutput, d_gaussKernel, input.height, input.width, GAUSS_WIDTH);
 
+	cudaThreadSynchronize();
+
+	cudaMalloc(&d_sobelKernelX, SOBEL_WIDTH * SOBEL_WIDTH);
+	cudaMalloc(&d_sobelKernelY, SOBEL_WIDTH * SOBEL_WIDTH);
+	cudaMalloc();
 
 	return 0;
 }
