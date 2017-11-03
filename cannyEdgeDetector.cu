@@ -109,7 +109,7 @@ __global__ void applyGaussianFilter(unsigned char *input, unsigned char *output,
 	output[y * iWidth + x] = (unsigned char)sum;
 }
 
-__global__ void applySobelFilter(unsigned char *in, unsigned char *out, int ih, int iw) {
+__global__ void applySobelFilter(unsigned char *in, unsigned char *intensity, float *direction, int ih, int iw) {
 
 	int x = (blockIdx.x * blockDim.x) + threadIdx.x;
 	int y = (blockIdx.y * blockDim.y) + threadIdx.y;
@@ -126,7 +126,8 @@ __global__ void applySobelFilter(unsigned char *in, unsigned char *out, int ih, 
 			   1 * in[(y - 1) * iw + (x - 1)] +    2 * in[(y - 1) * iw + x] +    1 * in[(y - 1) * iw + (x + 1)] +
 			(-1) * in[(y + 1) * iw + (x - 1)] + (-2) * in[(y + 1) * iw + x] + (-1) * in[(y + 1) * iw + (x + 1)];
 
-		out[y * iw + x] = (unsigned char)sqrt((float)(gx) * (float)(gx) + (float)(gy) * (float)(gy));
+		intensity[y * iw + x] = (unsigned char)sqrt((float)(gx) * (float)(gx) + (float)(gy) * (float)(gy));
+		direction[y * iw + x] = atan2((float)gy, (float)gx);
 	}
 }
 
@@ -147,7 +148,7 @@ int main(int argc, char *argv[]) {
 	};
 
 	unsigned char *d_gaussInput, *d_gaussOutput, *d_sobelOutput;
-	float *d_gaussKernel;
+	float *d_gaussKernel, *d_gradDirections;
 	int imgRes = input.height * input.width;
 
 	dim3 blocks(input.width / 16, input.height / 16);
@@ -162,9 +163,10 @@ int main(int argc, char *argv[]) {
 	applyGaussianFilter <<< blocks, threads >>> (d_gaussInput, d_gaussOutput, d_gaussKernel, input.height, input.width, GAUSS_WIDTH);
 
 	cudaMalloc(&d_sobelOutput, imgRes);
+	cudaMalloc(&d_gradDirections, imgRes * sizeof(float));
 	cudaMemcpy(d_sobelOutput, d_gaussOutput, imgRes, cudaMemcpyDeviceToDevice);
 	
-	applySobelFilter <<< blocks, threads >>> (d_gaussOutput, d_sobelOutput, input.height, input.width);
+	applySobelFilter <<< blocks, threads >>> (d_gaussOutput, d_sobelOutput, d_gradDirections, input.height, input.width);
 
 	copyPropertiesToImage(input, output);
 	output.data = (unsigned char*)malloc(output.height * output.width);
@@ -174,6 +176,7 @@ int main(int argc, char *argv[]) {
 	cudaFree(d_gaussInput);
 	cudaFree(d_gaussOutput);
 	cudaFree(d_sobelOutput);
+	cudaFree(d_gradDirections);
 
 	writeData(argv[2], output);
 
